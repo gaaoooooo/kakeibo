@@ -335,7 +335,7 @@ var S = {
   cats:{}, budgets:{}, ledger:{},
   view:"input",
   month:null,
-  draft:{ amount:0, kind:"変動費", cid:null, on:null, note:"", monthly:false },
+  draft:{ amount:0, kind:"変動費", cid:null, on:null, note:"", monthly:false, nextMonth:false },
   sheet:null,
   chipSig:"",
   /* v2：端末側の控えと同期 */
@@ -397,7 +397,7 @@ function entriesOf(m){
     if(!e||e.deleted) continue;
     out.push({id:id, month:m, on:e.occurred_on, cid:e.category_id,
       amount:+e.amount||0, note:e.note||"", source:e.source||"手入力",
-      monthly:e.monthly===true});
+      monthly:e.monthly===true, nextMonth:(m!==monthOf(e.occurred_on))});
   }
   out.sort(function(a,b){ return a.on<b.on?1:a.on>b.on?-1:(a.id<b.id?1:-1); });
   return out;
@@ -531,7 +531,8 @@ function applyOp(led, op){
   var ids = op.op==="save" ? [op.entry.id] : (op.ids||[]);
   ids.forEach(function(id){ for(var m in led){ delete led[m].items[id]; } });
   if(op.op==="save"){
-    var e=op.entry, m=e.occurred_on.slice(0,7);
+    var e=op.entry;
+    var m=e.next_month===true ? addMonth(monthOf(e.occurred_on),1) : monthOf(e.occurred_on);
     if(!led[m]) led[m]={items:{}};
     led[m].items[e.id]={ occurred_on:e.occurred_on, category_id:e.category_id, amount:e.amount,
       note:e.note||"", source:e.source||"手入力", monthly:e.monthly===true };
@@ -600,7 +601,7 @@ async function putEntry(month, id, body){
   enqueue({op:"save", entry:{
     id:id, occurred_on:body.occurred_on, category_id:body.category_id,
     amount:body.amount, note:body.note, source:body.source,
-    monthly:body.monthly===true }});
+    monthly:body.monthly===true, next_month:body.next_month===true }});
 }
 async function tombstone(month, ids){
   enqueue({op:"del", ids:ids});
@@ -614,13 +615,13 @@ async function commitDraft(){
   if(!needDb()) return;
   var d=S.draft;
   if(!(d.amount>0)||!d.cid) return;
-  var m=monthOf(d.on);
+  var m=d.nextMonth?addMonth(monthOf(d.on),1):monthOf(d.on);
   try{
     await putEntry(m, uid(), {occurred_on:d.on, category_id:d.cid,
-      amount:d.amount, note:d.note||"", source:"手入力", monthly:d.monthly});
-    toast(catName(d.cid)+"  "+yen(d.amount)+(d.monthly?"（毎月）":"")+
+      amount:d.amount, note:d.note||"", source:"手入力", monthly:d.monthly, next_month:d.nextMonth});
+    toast(catName(d.cid)+"  "+yen(d.amount)+(d.monthly?"（毎月）":"")+(d.nextMonth?"（翌月扱い）":"")+
       (navigator.onLine ? " を登録しました" : " を控えました（電波が戻ったら送ります）"));
-    d.amount=0; d.note=""; d.monthly=false;
+    d.amount=0; d.note=""; d.monthly=false; d.nextMonth=false;
     var ni=$("#noteInput"); if(ni) ni.value="";
     var ai=$("#amtVal"); if(ai) ai.value="";
     syncInput();
@@ -827,6 +828,8 @@ function mountInput(){
             'placeholder="摘要（任意）" value="'+esc(d.note)+'"></div>'+
           '<button type="button" class="chip" id="monthlyBtn" aria-pressed="'+(!!d.monthly)+'">'+
             '<i class="dot" style="background:var(--s-fixed)"></i>毎月</button>'+
+          '<button type="button" class="chip" id="nextMonthBtn" aria-pressed="'+(!!d.nextMonth)+'">'+
+            '翌月扱い</button>'+
         '</div>'+
         '<div class="pad"><button class="btn primary block" id="commitBtn">登録する</button></div>'+
       '</section>'+
@@ -860,6 +863,7 @@ function syncInput(){
     b.setAttribute("aria-pressed", String(b.dataset.cid===d.cid)); });
 
   var mb=$("#monthlyBtn"); if(mb) mb.setAttribute("aria-pressed", String(!!d.monthly));
+  var nb=$("#nextMonthBtn"); if(nb) nb.setAttribute("aria-pressed", String(!!d.nextMonth));
   var host2=$("#stripHost"); if(host2) host2.innerHTML=inputStrip();
   var btn=$("#commitBtn"); if(btn) btn.disabled = !(d.amount>0 && d.cid);
 }
@@ -972,6 +976,7 @@ function renderList(){
           '<span class="body"><span class="cat">'+esc(catName(e.cid))+
             (e.source==="引継"?'<span class="pill muted">引継</span>':"")+
             (e.monthly?'<span class="pill" style="color:var(--s-fixed);border-color:var(--s-fixed)">毎月</span>':"")+
+            (e.nextMonth?'<span class="pill muted">翌月扱い</span>':"")+
             (pend[e.id]?'<span class="pill pend">未送信</span>':"")+'</span>'+
           (e.note?'<span class="note">'+esc(e.note)+'</span>':"")+'</span>'+
           '<span class="amt num'+(inc?" inc":"")+'">'+(inc?"+":"−")+
@@ -1126,6 +1131,10 @@ function openEntrySheet(eid){
         '<button type="button" class="sw" id="eMonthly" aria-pressed="'+(!!e.monthly)+
           '" aria-label="毎月"><i></i></button>'+
         '<span style="font-size:12.5px">毎月この行を翌月へ引き継ぐ</span></div>'+
+      '<div style="display:flex;align-items:center;gap:10px">'+
+        '<button type="button" class="sw" id="eNextMonth" aria-pressed="'+(!!e.nextMonth)+
+          '" aria-label="翌月扱い"><i></i></button>'+
+        '<span style="font-size:12.5px">計上月を発生日の翌月にする（カード等の締め日ズレ用）</span></div>'+
       '<span style="font-size:11.5px;color:var(--muted);line-height:1.6">入力元：'+esc(e.source)+
       '　／　区分はカテゴリから決まります（現在：'+k+'）'+
       (k==="固定費"?'<br>固定費は毎月フラグに関係なく引き継がれます。':"")+'</span>'+
@@ -1137,6 +1146,10 @@ function openEntrySheet(eid){
     mSw.addEventListener("click",function(){
       mSw.setAttribute("aria-pressed", String(mSw.getAttribute("aria-pressed")!=="true"));
     });
+    var nmSw=host.querySelector("#eNextMonth");
+    nmSw.addEventListener("click",function(){
+      nmSw.setAttribute("aria-pressed", String(nmSw.getAttribute("aria-pressed")!=="true"));
+    });
     host.querySelector("#eDel").addEventListener("click",async function(){
       if(!needDb()) return;
       try{ await tombstone(e.month,[e.id]); closeSheet(); toast("削除しました"); }catch(err){ failed(err); }
@@ -1147,8 +1160,10 @@ function openEntrySheet(eid){
       var on=host.querySelector("#eOn").value, cid=host.querySelector("#eCat").value;
       var note=host.querySelector("#eNote").value.trim();
       if(!(amt>0)||!on||!cid){ toast("金額・カテゴリ・発生日は必須です"); return; }
-      var nm=monthOf(on), body={occurred_on:on, category_id:cid, amount:amt, note:note,
-        source:e.source, monthly:mSw.getAttribute("aria-pressed")==="true"};
+      var isNextMonth=nmSw.getAttribute("aria-pressed")==="true";
+      var nm=isNextMonth?addMonth(monthOf(on),1):monthOf(on);
+      var body={occurred_on:on, category_id:cid, amount:amt, note:note,
+        source:e.source, monthly:mSw.getAttribute("aria-pressed")==="true", next_month:isNextMonth};
       try{
         /* 明細IDで1行を特定して上書きする。発生日が別の月に動いても
            計上年月が書き換わるだけなので、行の作り直しは不要。 */
@@ -1283,6 +1298,7 @@ document.addEventListener("click",function(ev){
   if((b=t.closest("[data-kind]"))){ S.draft.kind=b.dataset.kind; S.draft.cid=null; return syncInput(); }
   if((b=t.closest("[data-cid]"))){ S.draft.cid=(S.draft.cid===b.dataset.cid?null:b.dataset.cid); return syncInput(); }
   if(t.closest("#monthlyBtn")){ S.draft.monthly=!S.draft.monthly; return syncInput(); }
+  if(t.closest("#nextMonthBtn")){ S.draft.nextMonth=!S.draft.nextMonth; return syncInput(); }
   if(t.closest("#commitBtn")) return commitDraft();
   if(t.closest("#carryBtn")) return carryOverFixed();
   if(t.closest("#uncarryBtn")) return cancelCarried();

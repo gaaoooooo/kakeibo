@@ -1,7 +1,7 @@
 // 画面一式を端末に置き、電波がなくても起動できるようにする。
 // API（script.google.com）は別オリジンなので触らない。
 // 画面を更新したら VERSION を上げる（新しい画面は次に開いたときに反映される）。
-const VERSION = 'v2-step1-1';
+const VERSION = 'v2-step1-2';
 const SHELL = [
   './',
   './index.html',
